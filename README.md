@@ -1,6 +1,8 @@
 # diff-eq
 
-A Clojure library for writing difference equations. Users use the dfn macro (short for difference function) to write functions that use previously given or generated values.  The macro will handle storage and retrieval of state. Historical values are given using a 2-vector with the first argument as the argument name and the second value as the offset in time. For example, given x, to use the previously given value of x, use [x -1]. (Equivalent to x(n -1).) 
+A Clojure library for writing difference equation functions. Users use the dfn (difference function) macro to write functions that use previously given or generated values.  The macro will handle storage and retrieval of state. Historical values are employed in code using a 2-vector with the first argument as the argument name and the second value as the offset in time. For example, given x, to use the previously given value of x, use [x -1]. (Equivalent to x(n -1).) 
+
+This is not a solver, as the generated functions are meant to be used in real-time processing of values one sample at a time.  
 
 ## Usage
 
@@ -8,13 +10,24 @@ A Clojure library for writing difference equations. Users use the dfn macro (sho
 
 (require '[diff-eq.core :refer [dfn])
 
-;; y(0) = a * x(0) - b * y(-1)
+;; y(n) = a * x(n) - b * y(n - 1)
 
 (def one-pole-filter
   (dfn y [x a0 b0]
     (- (* a0 x) (* b0 [y -1]))))
 
 (one-pole-filter 1.0 0.5 0.5)
+
+;; make coefficients constant and make one-pole-filter return filter function
+
+(defn one-pole-filter [a0 b0]
+  (dfn y [x]
+    (- (* a0 x) (* b0 [y -1]))))
+
+(def filter0 
+  (one-pole-filter 0.5 0.5))
+
+(filter0 1.0)
 
 ```
 
