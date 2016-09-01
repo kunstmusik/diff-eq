@@ -10,19 +10,27 @@ This is not a solver, as the generated functions are meant to be used in real-ti
 
 (require '[diff-eq.core :refer [dfn])
 
-;; y(n) = a * x(n) - b * y(n - 1)
+;; y(n) = b0 * x(n) - a1 * y(n - 1)
 
 (def one-pole-filter
-  (dfn y [x a0 b0]
-    (- (* a0 x) (* b0 [y -1]))))
+  (dfn y [x b0 a1]
+    (- (* b0 x) (* a1 [y -1]))))
 
 (one-pole-filter 1.0 0.5 0.5)
 
+;; y(n) = b0 * x(n) + b1 * x(n - 1)
+
+(def one-zero-filter
+  (dfn y [x b0 b1]
+    (+ (* b0 x) (* b1 [x -1]))))
+
+(one-zero-filter 1.0 0.5 0.5)
+
 ;; make coefficients constant and make one-pole-filter return filter function
 
-(defn one-pole-filter [a0 b0]
+(defn one-pole-filter [b0 a1]
   (dfn y [x]
-    (- (* a0 x) (* b0 [y -1]))))
+    (- (* b0 x) (* a1 [y -1]))))
 
 (def filter0 
   (one-pole-filter 0.5 0.5))
