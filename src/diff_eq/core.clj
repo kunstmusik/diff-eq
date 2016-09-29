@@ -1,6 +1,11 @@
 (ns diff-eq.core
   (:require [clojure.walk :as w]))
 
+(def ^:dynamic *dfn-debug* false)
+
+(defn- debug-print [msg]
+  (when *dfn-debug* (println msg)))
+
 (defn ring-read
   "Read from array as ring buffer, given start index and offset"
   [darr indx offset]
@@ -11,121 +16,190 @@
           off )]
     (aget darr adjoff)))
 
-(defn- map-filter
-  "Utility function to filter a map and reassemble into a map."
-  [ffn m]
-  (into {} (filter ffn m)))
-
-(defn- analyze-dfn
-  "Analyzes body according to given out arg and input arguments. Rewrites 
-  2-vectors in body that represent memory into history reads.  Returns filtered
-  history map with argument symbols as keys and num of memory locations as 
-  values, map of arg symbols to generated history symbols, map of arg symbols
-  to generated index symbols, and the updated body."
-  [y args body]
-  (let [syms (into #{y} args)
-        sym-hist (reduce #(assoc % %2 (gensym (str %2 "-hist"))) {} syms)
-        sym-indx (reduce #(assoc % %2 (gensym (str %2 "-indx"))) {} syms)
-        hist-map (atom (reduce #(assoc % %2 0) {} syms))
-        update-hist!
-        (fn [x]
-          (if (and (vector? x)
-                     (= 2 (count x)))
-            (if-let [sym (syms (first x))] 
-              (let [n (second x)]
-                ;(println sym n)
-                (when (< n (@hist-map sym))
-                  (swap! hist-map 
-                         #(assoc % sym n))
-                  (let [s (sym-hist sym) 
-                        indx (sym-indx sym)]
-                    `(diff-eq.core/ring-read ~s (aget ~indx 0) ~n)
-                  )))
-              x) 
-            x))
-        updated-body (w/postwalk update-hist! body)
-        filt-hist-map 
-        (->> 
-          @hist-map
-          (filter #(< (second %) 0)) 
-          (map #(assoc % 1 (* -1 (second %))))
-          (into {}))
-        hist-keys (into #{} (keys filt-hist-map))] 
-   [filt-hist-map 
-    (map-filter #(hist-keys (first %)) sym-hist) 
-    (map-filter #(hist-keys (first %)) sym-indx) 
-    updated-body]))
-
-
 (defn- gen-hist-state
   "Generates bindings to create state space for history."
-  [hist-map sym-hist]
+  [max-hist sym-hist]
   (reduce-kv (fn [m k v] 
-               (assoc m (sym-hist k) 
-                      `(double-array ~v))) 
-          {} hist-map))
+               (into m [(sym-hist k) `(double-array ~v)])) 
+          [] max-hist))
 
 (defn- gen-indx-state
   "Generates bindings to create state space for ring buffer indices."
-  [hist-map sym-indx]  
-  (reduce-kv (fn [m k v] 
-               (assoc m (sym-indx k) 
-                      `(long-array 1))) 
-          {} hist-map))
+  [max-hist sym-indx]  
+  (reduce-kv (fn [m k v]
+               (if (> v 1)
+                 (into m [(sym-indx k)
+                          `(long-array 1)])
+                 m))
+             [] max-hist ))
+
 
 
 (defn- gen-hist-updates
   "Generates history storage statements."
-  [y res-sym hist-map sym-hist sym-indx]
-  (reduce-kv 
-    (fn [m k v] 
-      (conj m 
-            (if (= k y)
-            `(aset-double ~(sym-hist k) (aget ~v 0) ~res-sym)
-            `(aset-double ~(sym-hist k) (aget ~v 0) ~k)))) 
-    [] sym-indx))
-
+  [hist-keys multi-hist-keys sym-hist sym-indx]
+  (let [multi-set (into #{} multi-hist-keys)] 
+    (reduce 
+      (fn [m k] 
+        (conj m 
+          (if (multi-set k) 
+                `(aset-double ~(sym-hist k) (aget ~(sym-indx k) 0) ~k)
+                `(aset-double ~(sym-hist k) 0 ~k)))) 
+      [] hist-keys)))
 
 (defn- gen-indx-updates
   "Generates index update and storage statements."
-  [hist-map sym-indx]
-  (reduce-kv 
-    (fn [m k v] 
+  [max-hist multi-hist-keys sym-indx]
+  (reduce 
+    (fn [m k] 
       (conj m 
-            `(aset-long ~v 0 (mod (inc (aget ~v 0)) ~(hist-map k))))) 
-    [] sym-indx))
+            (let [v (sym-indx k)]
+              `(aset-long ~v 0 (mod (inc (aget ~v 0)) 
+                                    ~(max-hist k)))))) 
+    [] multi-hist-keys))
+
+(defn- process-hist-map
+  [hist-map]
+  (->> 
+    hist-map
+    (filter #(< (second %) 0)) 
+    (map #(assoc % 1 (* -1 (second %))))
+    (into {})))
+
+(defn- analyze-dfn 
+  "sigs - set of all signals (given and generated)
+  eq - equation to analyze"
+  [sigs eq] 
+  (let [hist-map (atom (zipmap sigs (repeat 0)))
+        update-hist!
+        (fn [x]
+          (when (and (vector? x)
+                     (= 2 (count x))
+                     (sigs (first x)))
+            (let [[sym n] x]
+                (when (< n (@hist-map sym))
+                  (swap! hist-map assoc sym n))))
+            x)] 
+  (w/postwalk update-hist! eq)
+  (process-hist-map @hist-map)
+    ))
+
+(defn- transform-dfn
+  [sym-hist sym-indx eq]
+  (letfn [(hist-transform [x]
+            (if (and (vector? x)
+                     (= 2 (count x))
+                     (contains? sym-hist (first x)))
+              (let [[sym n] x
+                    s (sym-hist sym)
+                    indx (sym-indx sym)]
+                (if indx
+                 `(diff-eq.core/ring-read ~s (aget ~indx 0) ~n) 
+                 `(aget ~s 0)))
+              x))]
+    (w/postwalk hist-transform eq)
+))
+
+(defn- analyze-history
+  [found-hist]
+  (reduce 
+    (fn [a b]
+      (reduce-kv
+        (fn [m k v]
+          (if (contains? m k)
+            (if (> v (m k))
+              (assoc m k v) 
+              m) 
+            (assoc m k v))) 
+        a b))
+    {} found-hist))
 
 (defmacro dfn
-  "Generates a difference equation function. Previous values of inputs or 
-  ouputs can be expressed using a 2-vector with the argument symbol used
+  "Generates a signal processing function from given difference equations. Previous values of inputs or 
+  ouputs are expressed within difference equations using a 2-vector with the argument symbol used
   as the first value and the n-offset as the second value. dfn will generate
   code to read and write history for the inputs and outputs that require it. 
-  dfn assumes inputs and outputs are all of type double.
+  dfn currently assumes inputs and outputs are all of type double.
 
   Internally, arrays and indexes are used to create ring buffers for keeping
   track of history."
-  [y args body]
-  {:pre [(symbol? y) (vector? args)]} 
-  (let [[hist-map sym-hist sym-indx new-body] 
-        (analyze-dfn y args body)
-        res-sym (gensym "result")
-        hist-state (gen-hist-state hist-map sym-hist)
-        indx-state (gen-indx-state hist-map sym-indx)
-        state-bindings (reduce #(into % %2) [] 
-                               (concat indx-state hist-state))
-        hist-updates (gen-hist-updates y res-sym hist-map sym-hist sym-indx)
-        indx-updates (gen-indx-updates hist-map sym-indx)
-        ]
-    (if (pos? (count hist-state))
-      `(let ~state-bindings
-         (fn ~args
-           (let [~res-sym ~new-body]
-             ~@hist-updates
-             ~@indx-updates 
-             ~res-sym 
-             ))) 
+  [args & body]
+  {:pre [(vector? args)
+         (or (= 2 (count body))
+             (and (>= (count body) 5) 
+               (= :where (nth body 2))
+               (odd? (count body))))]} 
+  (let [ ;; analysis
+        main-eq (take 2 body)
+        rest-eq (partition 2 (drop 3 body)) 
+        result-sym (first main-eq)
+        all-eq (map (partial into []) (cons main-eq rest-eq))
+        gen-sigs (set (cons result-sym (map first rest-eq)))
+        all-sigs (set (into args gen-sigs))
+        found-hist (map #(analyze-dfn all-sigs (second %)) all-eq)
+        max-hist (analyze-history found-hist)
+        hist-keys (keys max-hist)
+        multi-hist-keys 
+        (reduce-kv (fn [m k v] (if (> v 1)
+                                 (conj m k)
+                                 m))
+                     [] max-hist)
+        analyses (map #(conj % %2) all-eq found-hist)
 
-      `(fn ~args
-         ~new-body) 
-      )))
+        ;; create symbols for history and indices
+        sym-hist (zipmap hist-keys 
+                           (map #(gensym (str % "-hist")) 
+                                hist-keys))              
+        sym-indx (zipmap multi-hist-keys 
+                           (map #(gensym (str % "-indx")) 
+                                multi-hist-keys))              
+        ;; transformation 
+        trans-eq 
+        (map #(update % 1 (partial transform-dfn sym-hist sym-indx)) 
+             analyses)
+        main-body (mapcat (partial take 2) trans-eq) 
+
+        ;; state
+        hist-state (gen-hist-state max-hist sym-hist)
+        indx-state (gen-indx-state max-hist sym-hist)
+        hist-updates
+        (gen-hist-updates 
+          hist-keys multi-hist-keys
+          sym-hist sym-indx)
+        indx-updates
+         (gen-indx-updates 
+            max-hist multi-hist-keys sym-indx) 
+
+        ;; function body
+        func-body-start `(let [~@main-body])
+        func-body (concat func-body-start
+                          hist-updates
+                          indx-updates
+                          [result-sym])]
+    ;(println main-eq)
+    ;(println rest-eq)
+    ;(println gen-sigs)
+    ;(println all-sigs)
+    ;(println found-hist)
+    ;(println max-hist)
+    ;(println analyses)
+    ;(println sym-hist)
+    ;(println sym-indx)
+    ;(println trans-eq)
+    ;(println hist-state)
+    ;(println indx-state)
+
+    `(let ~(into hist-state indx-state)
+      (fn ~args
+        ~func-body
+        ))
+    )
+  )
+
+(def biquad-tdfII
+  (dfn [x b0 b1 b2 a1 a2]
+        y (+ (* b0 x) [s1 -1])
+        :where
+        s1 (+ [s2 -1] (- (* b1 x) (* a1 y)))
+        s2 (- (* b2 x) (* a2 y))))
 
