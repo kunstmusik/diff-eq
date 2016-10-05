@@ -1,4 +1,4 @@
-(defproject diff-eq "0.1.0-SNAPSHOT"
+(defproject diff-eq "0.1.0"
   :description "Library for generating signal processing functions from difference equations."
   :url "http://github.com/kunstmusik/diff-eq"
   :license {:name "Eclipse Public License"
