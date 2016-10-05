@@ -5,7 +5,7 @@
 (deftest one-pole-test
   (testing "one-pole filter"
     (let [one-pole
-          (dfn2 [x a0 b0] 
+          (dfn [x a0 b0] 
                y (- (* a0 x) (* b0 [y -1])))]
        (is (= 0.5 (one-pole 1 0.5 0.5))) 
        (is (= 0.25 (one-pole 1 0.5 0.5))) 

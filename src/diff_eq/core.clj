@@ -1,10 +1,7 @@
 (ns diff-eq.core
-  (:require [clojure.walk :as w]))
-
-(def ^:dynamic *dfn-debug* false)
-
-(defn- debug-print [msg]
-  (when *dfn-debug* (println msg)))
+  (:require [clojure.walk :as w]
+            [alandipert.kahn :refer [kahn-sort]]
+            ))
 
 (defn ring-read
   "Read from array as ring buffer, given start index and offset"
@@ -21,7 +18,7 @@
   [max-hist sym-hist]
   (reduce-kv (fn [m k v] 
                (into m [(sym-hist k) `(double-array ~v)])) 
-          [] max-hist))
+             [] max-hist))
 
 (defn- gen-indx-state
   "Generates bindings to create state space for ring buffer indices."
@@ -42,7 +39,7 @@
     (reduce 
       (fn [m k] 
         (conj m 
-          (if (multi-set k) 
+              (if (multi-set k) 
                 `(aset-double ~(sym-hist k) (aget ~(sym-indx k) 0) ~k)
                 `(aset-double ~(sym-hist k) 0 ~k)))) 
       [] hist-keys)))
@@ -59,6 +56,8 @@
     [] multi-hist-keys))
 
 (defn- process-hist-map
+  "Takes found history map and converts to positive values to use as array
+  lengths"
   [hist-map]
   (->> 
     hist-map
@@ -77,14 +76,16 @@
                      (= 2 (count x))
                      (sigs (first x)))
             (let [[sym n] x]
-                (when (< n (@hist-map sym))
-                  (swap! hist-map assoc sym n))))
-            x)] 
-  (w/postwalk update-hist! eq)
-  (process-hist-map @hist-map)
+              (when (< n (@hist-map sym))
+                (swap! hist-map assoc sym n))))
+          x)] 
+    (w/postwalk update-hist! eq)
+    (process-hist-map @hist-map)
     ))
 
 (defn- transform-dfn
+  "Transforms difference equation function, replacing history notation with
+  history handling code (array or ring-buffer get)."
   [sym-hist sym-indx eq]
   (letfn [(hist-transform [x]
             (if (and (vector? x)
@@ -94,13 +95,45 @@
                     s (sym-hist sym)
                     indx (sym-indx sym)]
                 (if indx
-                 `(diff-eq.core/ring-read ~s (aget ~indx 0) ~n) 
-                 `(aget ~s 0)))
+                  `(diff-eq.core/ring-read ~s (aget ~indx 0) ~n) 
+                  `(aget ~s 0)))
               x))]
     (w/postwalk hist-transform eq)
-))
+    ))
+
+(defn- get-deps
+  "Find dependencies for a difference equation function, given the possible
+  generated signals it could depend upon. Should be called after initial
+  equations are transformed for history notation so that the sorting is done
+  for generated values in the current n time."
+  [dfn gen-sigs]
+  (let [deps (atom #{})
+        analyzer 
+        (fn [a]
+          (when (and (symbol? a) (gen-sigs a))
+            (swap! deps conj a))
+          a)]
+    (w/postwalk analyzer dfn) 
+    @deps))
+
+(defn- reorder-dfn
+  "Reorders difference equation functions based on dependencies upon
+  outputs of other difference equations.  Uses Alan Dipert's implementation
+  of Kahn's algorithm for topological sort."
+  [dfns gen-sigs]
+  (let [deps-map 
+        (zipmap 
+          (map first dfns)
+          (map #(get-deps (second %) gen-sigs) dfns))
+        dfn-map (zipmap (map first dfns) (map second dfns))
+        sorted-deps (kahn-sort deps-map)]
+    (when-not sorted-deps
+      (throw (Exception. "Cyclic dependency found")))
+    (mapcat #(vector % (dfn-map %)) (reverse sorted-deps))))
 
 (defn- analyze-history
+  "Given the found history for each difference equation, merge to give the
+  largest history found per signal."
   [found-hist]
   (reduce 
     (fn [a b]
@@ -121,14 +154,17 @@
   code to read and write history for the inputs and outputs that require it. 
   dfn currently assumes inputs and outputs are all of type double.
 
+  Difference equations may be ordered as the user wishes; equations will be analyzed for dependencies and
+  topologically sorted.  If a circular dependency is found, dfn will throw an exception. 
+
   Internally, arrays and indexes are used to create ring buffers for keeping
   track of history."
   [args & body]
   {:pre [(vector? args)
          (or (= 2 (count body))
              (and (>= (count body) 5) 
-               (= :where (nth body 2))
-               (odd? (count body))))]} 
+                  (= :where (nth body 2))
+                  (odd? (count body))))]} 
   (let [ ;; analysis
         main-eq (take 2 body)
         rest-eq (partition 2 (drop 3 body)) 
@@ -143,21 +179,21 @@
         (reduce-kv (fn [m k v] (if (> v 1)
                                  (conj m k)
                                  m))
-                     [] max-hist)
+                   [] max-hist)
         analyses (map #(conj % %2) all-eq found-hist)
 
         ;; create symbols for history and indices
         sym-hist (zipmap hist-keys 
-                           (map #(gensym (str % "-hist")) 
-                                hist-keys))              
+                         (map #(gensym (str % "-hist")) 
+                              hist-keys))              
         sym-indx (zipmap multi-hist-keys 
-                           (map #(gensym (str % "-indx")) 
-                                multi-hist-keys))              
+                         (map #(gensym (str % "-indx")) 
+                              multi-hist-keys))              
         ;; transformation 
         trans-eq 
         (map #(update % 1 (partial transform-dfn sym-hist sym-indx)) 
              analyses)
-        main-body (mapcat (partial take 2) trans-eq) 
+        main-body (reorder-dfn trans-eq gen-sigs)
 
         ;; state
         hist-state (gen-hist-state max-hist sym-hist)
@@ -167,8 +203,8 @@
           hist-keys multi-hist-keys
           sym-hist sym-indx)
         indx-updates
-         (gen-indx-updates 
-            max-hist multi-hist-keys sym-indx) 
+        (gen-indx-updates 
+          max-hist multi-hist-keys sym-indx) 
 
         ;; function body
         func-body-start `(let [~@main-body])
@@ -188,18 +224,52 @@
     ;(println trans-eq)
     ;(println hist-state)
     ;(println indx-state)
+    ;(println main-body)
 
     `(let ~(into hist-state indx-state)
-      (fn ~args
-        ~func-body
-        ))
+       (fn ~args
+         ~func-body
+         ))
     )
   )
 
-(def biquad-tdfII
-  (dfn [x b0 b1 b2 a1 a2]
-        y (+ (* b0 x) [s1 -1])
-        :where
-        s1 (+ [s2 -1] (- (* b1 x) (* a1 y)))
-        s2 (- (* b2 x) (* a2 y))))
 
+(comment
+
+
+  (def biquad-tdfII
+    (dfn [x b0 b1 b2 a1 a2]
+         y (+ (* b0 x) [s1 -1])
+         :where
+         s1 (+ [s2 -1] (- (* b1 x) (* a1 y)))
+         s2 (- (* b2 x) (* a2 y))))
+
+  ;; one-pole, zero-delay feedback filter
+
+  (def sr 44100)
+
+  ;(defn calc-G [cut]
+  ;  (let [wd  (* cut (* 2.0 Math/PI))
+  ;        T (/ 1.0 sr)
+  ;        wa  (* (/ 2.0 T) 
+  ;               (Math/tan (* wd (/ T 2.0))))
+  ;        g (* wa (/ T 2))]
+  ;    (/ g (+ 1.0 g))))
+
+  ;; Zero-delay feedback, one-pole low-pass filter
+  (def zdf-lpf1
+    (dfn [x cut]
+         y (+ v [s -1])
+
+         :where
+         v (* G (- x [s -1])) 
+         s (+ v y)
+
+         ;; G calculation
+         wd  (* cut (* 2.0 Math/PI))
+         T (/ 1.0 sr)
+         wa  (* (/ 2.0 T) 
+                (Math/tan (* wd (/ T 2.0))))
+         g (* wa (/ T 2))
+         G (/ g (+ 1.0 g))
+         )))

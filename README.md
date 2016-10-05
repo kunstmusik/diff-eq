@@ -54,10 +54,60 @@ This is not a solver, as the generated functions are meant to be used in real-ti
         s1 (+ [s2 -1] (- (* b1 x) (* a1 y)))
         s2 (- (* b2 x) (* a2 y))))
 
+;; :where clauses may be ordered as fits the user. dfn will analyze
+;; the clauses and main equation and topologically sort them based upon
+;; signal dependencies.
+;;
+;; Zero-delay feedback, one-pole low pass filter
+;; Based on code by Will Pirkle, presented in:
+;;
+;; http://www.willpirkle.com/Downloads/AN-4VirtualAnalogFilters.2.0.pdf
+;; 
+;; and in his book "Designing software synthesizer plug-ins in C++ : for 
+;; RackAFX, VST3, and Audio Units"
+;;
+;; ZDF using Trapezoidal integrator by Vadim Zavalishin, presented in "The Art 
+;; of VA Filter Design" (https://www.native-instruments.com/fileadmin/ni_media/
+;; downloads/pdf/VAFilterDesign_1.1.1.pdf)
+;; 
+;; Note, use of s here differs from Zavalishin's notation in that it is defined 
+;; as the value before the unit-delay, which keeps the n-time relationship 
+;; consistent
+
+(def zdf-lpf1
+    (dfn [x cut]
+         y (+ v [s -1])
+
+         :where
+         v (* G (- x [s -1])) 
+         s (+ v y)
+
+         ;; G calculation
+         wd  (* cut (* 2.0 Math/PI))
+         T (/ 1.0 sr)
+         wa  (* (/ 2.0 T) 
+                (Math/tan (* wd (/ T 2.0))))
+         g (* wa (/ T 2))
+         G (/ g (+ 1.0 g))
+         ))
+
 ```
 ## Documentation
 
 Further information about the macro implementation is available in the [documentation](docs/intro.md).
+
+## Acknowledgements
+
+This library uses Alan Dipert's implementation of Kahn's Algorithm for
+topological sorting. It is available
+[online](https://gist.github.com/alandipert/1263783) and it has also been
+included within this project.  
+
+
+## Change Log
+
+### 0.1 
+* initial release
 
 ## License
 
