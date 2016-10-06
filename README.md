@@ -104,15 +104,6 @@ topological sorting. It is available
 included within this project.  
 
 
-## Change Log
-
-### 0.1.1
-* fixed reflection warning
-
-
-### 0.1.0
-* initial release
-
 ## License
 
 Copyright © 2016 Steven Yi 

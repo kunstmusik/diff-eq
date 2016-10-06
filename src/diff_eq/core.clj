@@ -147,6 +147,11 @@
         a b))
     {} found-hist))
 
+(defn- type-hint-args
+  [args]
+  (let [res (mapv #(with-meta % {:tag "double"}) args)]
+    (with-meta res {:tag "double"})))
+
 (defmacro dfn
   "Generates a signal processing function from given difference equations. Previous values of inputs or 
   ouputs are expressed within difference equations using a 2-vector with the argument symbol used
@@ -227,7 +232,7 @@
     ;(println main-body)
 
     `(let ~(into hist-state indx-state)
-       (fn ~args
+       (fn ~(type-hint-args args)
          ~func-body
          ))
     )
