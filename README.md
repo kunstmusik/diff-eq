@@ -94,7 +94,7 @@ This is not a solver, as the generated functions are meant to be used in real-ti
 ```
 ## Documentation
 
-Further information about the macro implementation is available in the [documentation](docs/intro.md).
+Further information about the macro implementation is available in the [documentation](doc/intro.md).
 
 ## Acknowledgements
 
