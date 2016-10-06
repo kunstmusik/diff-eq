@@ -5,7 +5,7 @@
 
 (defn ring-read
   "Read from array as ring buffer, given start index and offset"
-  [darr indx offset]
+  [^doubles darr indx offset]
   (let [off (+ indx offset)
         adjoff 
         (if (neg? off)
