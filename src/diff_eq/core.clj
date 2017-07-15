@@ -5,7 +5,7 @@
 
 (defn ring-read
   "Read from array as ring buffer, given start index and offset"
-  [^doubles darr indx offset]
+  ^double [^doubles darr ^long indx ^long offset]
   (let [off (+ indx offset)
         adjoff 
         (if (neg? off)
@@ -23,7 +23,7 @@
 (defn- gen-indx-state
   "Generates bindings to create state space for ring buffer indices."
   [max-hist sym-indx]  
-  (reduce-kv (fn [m k v]
+  (reduce-kv (fn [m k ^long v]
                (if (> v 1)
                  (into m [(sym-indx k)
                           `(long-array 1)])
@@ -61,8 +61,8 @@
   [hist-map]
   (->> 
     hist-map
-    (filter #(< (second %) 0)) 
-    (map #(assoc % 1 (* -1 (second %))))
+    (filter #(< (long (second %)) 0)) 
+    (map #(assoc % 1 (* -1 (long (second %)))))
     (into {})))
 
 (defn- analyze-dfn 
@@ -75,8 +75,8 @@
           (when (and (vector? x)
                      (= 2 (count x))
                      (sigs (first x)))
-            (let [[sym n] x]
-              (when (< n (@hist-map sym))
+            (let [[sym ^long n] x]
+              (when (< n (long (@hist-map sym)))
                 (swap! hist-map assoc sym n))))
           x)] 
     (w/postwalk update-hist! eq)
@@ -138,9 +138,9 @@
   (reduce 
     (fn [a b]
       (reduce-kv
-        (fn [m k v]
+        (fn [m k ^long v]
           (if (contains? m k)
-            (if (> v (m k))
+            (if (> v (long (m k)))
               (assoc m k v) 
               m) 
             (assoc m k v))) 
@@ -181,7 +181,7 @@
         max-hist (analyze-history found-hist)
         hist-keys (keys max-hist)
         multi-hist-keys 
-        (reduce-kv (fn [m k v] (if (> v 1)
+        (reduce-kv (fn [m k ^long v] (if (> v 1)
                                  (conj m k)
                                  m))
                    [] max-hist)
@@ -238,9 +238,7 @@
     )
   )
 
-
 (comment
-
 
   (def biquad-tdfII
     (dfn [x b0 b1 b2 a1 a2]

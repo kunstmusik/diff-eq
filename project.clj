@@ -1,4 +1,4 @@
-(defproject kunstmusik/diff-eq "0.1.1"
+(defproject kunstmusik/diff-eq "0.1.2"
   :description "Library for generating signal processing functions from difference equations."
   :url "http://github.com/kunstmusik/diff-eq"
   :license {:name "Eclipse Public License"
@@ -8,5 +8,5 @@
   :profiles {
             :dev {
                   :global-vars {*warn-on-reflection* true
-                                *unchecked-math* true }}}
+                                *unchecked-math* :warn-on-boxed }}}
   )
